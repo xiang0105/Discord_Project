@@ -1,0 +1,33 @@
+# Environment variables (secrets)
+.env
+.env.*
+!.env.example
+
+# Sensitive local data
+data/config.json
+data/history.json
+data/memory.json
+
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
