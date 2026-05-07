@@ -1,59 +1,75 @@
-# import asyncio
+import logging
 import os
+import sys
+
 import discord
 from discord.ext import commands
-# from discord import app_commands
 from dotenv import load_dotenv
 
-from models.config_manager import ConfigManager
 from models.ai_model import AIModel
-from models.message_handler import MessageHandler
+from models.config_manager import ConfigManager
 from models.evolution_task import EvolutionTask
+from models.message_handler import MessageHandler
 
-load_dotenv()
 
-if __name__ == '__main__':
+def require_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        logging.error("Missing required environment variable: %s", name)
+        raise SystemExit(1)
+    return value
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
+def main() -> None:
+    load_dotenv()
+    configure_logging()
+
     config = ConfigManager.load()
+    google_api_key = require_env("GOOGLE_API_KEY")
+    token = require_env("DISCORD_TOKEN")
 
-    # Sensitive values must come from environment variables.
-    google_api_key = os.getenv('GOOGLE_API_KEY')
-    token = os.getenv('DISCORD_TOKEN')
-    bot_owner_id = os.getenv('BOT_OWNER_ID')
-
+    bot_owner_id = os.getenv("BOT_OWNER_ID", "").strip()
     if bot_owner_id:
-        config['bot_owner_id'] = bot_owner_id
+        if not bot_owner_id.isdigit():
+            logging.error("BOT_OWNER_ID must be a Discord numeric user id.")
+            raise SystemExit(1)
+        config["bot_owner_id"] = bot_owner_id
 
-    if not google_api_key:
-        print('請在環境變數或 .env 設定 GOOGLE_API_KEY')
-        raise SystemExit(1)
-
-    if not token:
-        print('請在環境變數或 .env 設定 DISCORD_TOKEN')
-        raise SystemExit(1)
-
-    # 建立 AI 模型介面（固定 model）
     ai = AIModel(api_key=google_api_key)
-    
-    # 顯示可用模型
-    # ai.list_models() 
-    # print("-" * 30)
 
-    # Bot intents
     intents = discord.Intents.default()
-    intents.message_content = True 
-    intents.members = True
+    intents.message_content = True
+    intents.members = False
 
-    bot = commands.Bot(command_prefix='/', intents=intents)
+    bot = commands.Bot(command_prefix="/", intents=intents)
 
-    # 註冊樹狀指令與處理器
     msg_handler = MessageHandler(bot=bot, ai_model=ai, config=config)
     msg_handler.register_commands()
 
-    # 啟動背景演化任務
-    evolution = EvolutionTask(bot=bot, ai_model=ai, config=config, message_handler=msg_handler)
-    # evolution.start()
-
+    evolution = EvolutionTask(
+        bot=bot,
+        ai_model=ai,
+        config=config,
+        message_handler=msg_handler,
+    )
     msg_handler.attach_evolution_task(evolution)
 
-    # 啟動 bot
-    bot.run(token)
+    try:
+        bot.run(token)
+    except discord.LoginFailure:
+        logging.error("Discord login failed. Check DISCORD_TOKEN.")
+        raise SystemExit(1) from None
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user.")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,76 +1,102 @@
-# utils.py
-# 共用工具函式：切字串、safe json io、timestamp 等
-
+import datetime
 import json
 import os
-import datetime
-from typing import Any, Optional, List, Dict
+import re
+import tempfile
+from typing import Any, Optional
 
-def smart_split(text: str, limit: int = 1900) -> List[str]:
-    """
-    把長文字依照換行或長度切成多段，確保不會超過 limit。
-    回傳一串片段（每段 <= limit）。
-    """
-    parts: List[str] = []
+
+SECRET_PATTERNS = [
+    re.compile(r"(DISCORD_TOKEN|GOOGLE_API_KEY|BOT_TOKEN)\s*=\s*[^\s]+", re.I),
+    re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),
+    re.compile(r"[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27,}"),
+]
+
+
+def smart_split(text: str, limit: int = 1900) -> list[str]:
+    parts: list[str] = []
     if not text:
         return parts
 
     remaining = text
     while len(remaining) > limit:
         cut = remaining[:limit]
-        last_n = cut.rfind("\n")
-        if last_n == -1:
-            # 找不到換行就硬切
-            last_n = limit
-        parts.append(remaining[:last_n])
-        remaining = remaining[last_n:].lstrip("\n")
+        last_newline = cut.rfind("\n")
+        split_at = last_newline if last_newline > 200 else limit
+        parts.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+
     if remaining:
         parts.append(remaining)
     return parts
 
 
-# ---- safe json io helpers ----
 def safe_read_json(path: str) -> Optional[Any]:
-    """安全讀取 JSON 檔案，若不存在或 parse 失敗回傳 None"""
     if not os.path.exists(path):
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError):
         return None
 
+
 def safe_write_json(path: str, data: Any) -> bool:
-    """安全寫入 JSON（會建立目錄），成功回傳 True"""
     try:
-        dirpath = os.path.dirname(path)
-        if dirpath and not os.path.exists(dirpath):
-            os.makedirs(dirpath, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", suffix=".json", dir=directory or None)
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=4)
+        os.replace(tmp_path, path)
         return True
-    except Exception as e:
-        print("safe_write_json failed:", e)
+    except OSError:
         return False
 
+
 def timestamp_now() -> str:
-    """回傳現在時間的 ISO 字串（本地 time）"""
-    return datetime.datetime.now().isoformat(timespec='seconds')
+    return datetime.datetime.now().isoformat(timespec="seconds")
 
-def ensure_str(x: Any) -> str:
-    """把任何東西轉成安全字串表示（避免 None）"""
-    if x is None:
+
+def ensure_str(value: Any) -> str:
+    if value is None:
         return ""
-    if isinstance(x, str):
-        return x
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def clean_prompt(text: str, *, max_chars: int = 4000) -> str:
+    if not text:
+        return ""
+    text = remove_control_chars(text)
+    return " ".join(text.strip().split())[:max_chars]
+
+
+def remove_control_chars(text: str) -> str:
+    return "".join(ch for ch in text if ch == "\n" or ch == "\t" or ord(ch) >= 32)
+
+
+def redact_secrets(text: str) -> str:
+    redacted = text
+    for pattern in SECRET_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def extract_json_object(text: str) -> dict | None:
+    cleaned = text.strip().replace("```json", "").replace("```", "").strip()
     try:
-        return str(x)
-    except Exception:
-        return ""
-
-# 其他常用工具可以放在這裡，例如：clean_prompt, truncate, normalize_whitespace
-def clean_prompt(s: str) -> str:
-    """簡單清理 prompt：去頭尾空白並壓縮連續空白到單一空白"""
-    if not s:
-        return ""
-    return " ".join(s.strip().split())
+        value = json.loads(cleaned)
+        return value if isinstance(value, dict) else None
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, re.S)
+        if not match:
+            return None
+        try:
+            value = json.loads(match.group(0))
+            return value if isinstance(value, dict) else None
+        except json.JSONDecodeError:
+            return None
